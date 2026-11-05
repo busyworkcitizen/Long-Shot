@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Builds Long Shot from src/game.html and data/prompts.json.
+// Builds Long Shot from src/game.html, src/engine.mjs and data/prompts.json.
 //
 //   index.html                      Standalone page. Open it in a browser or serve it with GitHub Pages.
 //   dist/long-shot.artifact.html    Page body for publishing as a Claude artifact, which adds the
@@ -21,10 +21,13 @@ const bank = prompts.map(p => {
 const LS = String.fromCharCode(0x2028), PS = String.fromCharCode(0x2029);
 const json = JSON.stringify(bank).replace(/</g, '\\u003c').split(LS).join('\\u2028').split(PS).join('\\u2029');
 
+// The engine is an ES module shared with the server; inline it into the page's script without exports.
+const engine = read('src/engine.mjs').replace(/^export /gm, '');
 const template = read('src/game.html');
-const marker = '/*@@BANK@@*/[]';
-if (!template.includes(marker)) throw new Error(`src/game.html is missing the ${marker} placeholder`);
-const fragment = template.replace(marker, () => json);
+for (const m of ['/*@@BANK@@*/[]', '/*@@ENGINE@@*/']) {
+  if (!template.includes(m)) throw new Error(`src/game.html is missing the ${m} placeholder`);
+}
+const fragment = template.replace('/*@@ENGINE@@*/', () => engine).replace('/*@@BANK@@*/[]', () => json);
 
 // Artifact body: claude.ai wraps it in its own document skeleton.
 fs.mkdirSync(path.join(root, 'dist'), {recursive: true});

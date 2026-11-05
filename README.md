@@ -16,7 +16,7 @@ A daily trivia game with a casino twist. Each prompt asks you to name something,
 
 - **Payout.** Base chips are `10 × log2(1 + odds)`, capped at 100. Evens is worth 10, 100/1 is 67 and 1000/1 is 100. The base is multiplied by your chip's multiplier.
 - **Bust.** You bust if your answer comes in at shorter odds than your chip needs, or the answer isn't accepted. Three busts end the card.
-- **First call.** Be the first player to land an answer at 33/1 or longer and your name stays on it in the Trophy case and on High rollers.
+- **First call.** Be the first player anywhere to land an answer at 33/1 or longer and your name stays on it in the Trophy case and on High rollers.
 - **Unlimited.** Endless rounds drawn from the whole deck, leaving out today's daily prompts. A run ends at three busts, or you can cash out after any round. Your best run is ranked on High rollers. Unlimited play doesn't affect the daily odds.
 
 ## How the odds work
@@ -32,7 +32,7 @@ The listed answers cover 95% of expected picks. An answer that isn't listed open
 
 ## Running it
 
-The game itself has no dependencies. The build scripts need Node 18 or newer, and you only need `npm install` to work on the pit boss Worker.
+The game itself has no dependencies. The build scripts need Node 18 or newer, and you only need `npm install` to work on the server.
 
 ```bash
 npm run check
@@ -42,39 +42,35 @@ That validates `data/prompts.json` and builds `index.html`. Open `index.html` in
 
 To host it, turn on GitHub Pages for the repository and serve the `main` branch from the root.
 
-### Standalone vs. Claude artifact
+### Three ways it runs
 
-Some features need the Claude artifact runtime:
-- a shared table, so odds come from everyone's picks, with the High rollers leaderboard and first calls
-- player names and avatars
+- **Public site, on its own.** Odds come from the house list alone and chips are saved in the browser. An answer that isn't listed counts as the listed answer it ends with ("giant squid" counts as Squid); otherwise it's voided, with no chips and no bust.
+- **Public site with the table server** (below, free). The site becomes multiplayer. The server scores every answer, so scores can't be faked, and odds come from everyone's daily picks. First calls are global, and High rollers shows today's chip count and the best unlimited runs. Players pick a name, with no account or email.
+- **Claude artifact.** The same multiplayer features run on Claude's own storage, with Claude as the pit boss for unlisted answers.
 
-The standalone `index.html` runs without them: odds come from the house list alone and your chips are saved in the browser. The **pit boss**, where Claude rules on answers that aren't in the house list, works on the standalone site once you deploy the pit boss Worker below. Until then, unlisted answers are voided (no chips, no bust).
+### Multiplayer on the public site (free)
 
-### Pit boss on the public site
+The table server is a Cloudflare Worker (`worker/index.ts`) with a built-in SQLite database (a Durable Object). Both run on Cloudflare's free plan, and the database is created automatically when the Worker deploys.
 
-A static site can't hold an API key, because anyone could copy it. So the pit boss runs as a small Cloudflare Worker (`worker/index.ts`) that keeps your Anthropic API key secret.
+1. **Deploy the Worker.** Sign up free at [dash.cloudflare.com](https://dash.cloudflare.com), open Workers & Pages, create an application and import this GitHub repository. Cloudflare reads `wrangler.toml` and deploys it. From a terminal you can run `npx wrangler login` and then `npm run worker:deploy` instead.
+2. **Check it.** Opening the Worker's URL (something like `https://long-shot.<your-subdomain>.workers.dev`) should show `"table": true`.
+3. **Point the site at it.** Set `serverUrl` in `config.json` to that URL. GitHub's web editor is fine. GitHub Pages redeploys and the site is multiplayer.
 
-The page sends the Worker only a prompt id and the player's answer (40 characters at most). The Worker writes the question to Claude itself, so it can't be used as a general Claude proxy. It also:
-- only accepts calls from the sites listed in `ALLOWED_ORIGINS` in `wrangler.toml`
-- limits each player's IP to 30 checks every 10 minutes
-- only gets asked about answers that aren't already in the house list
+How the server keeps scores honest:
+- The page tells the server which listed answer it matched, and the server checks that one entry against what was typed before scoring it.
+- It only accepts each daily round once and in order, and only for that day's prompts.
+- It won't repeat a prompt within an unlimited run.
+- It only accepts calls from the sites listed in `ALLOWED_ORIGINS` in `wrangler.toml`, and rate-limits each IP.
 
-**1. Get an Anthropic API key.** At [console.anthropic.com](https://console.anthropic.com), add credits and create an API key. Set a monthly spend limit for the account as well, as a safety net.
+If the server can't be reached, the page carries on and scores that round on the device.
 
-**2. Deploy the Worker on Cloudflare (free plan).**
-
-- **From the dashboard:** go to Workers & Pages, create an application, and import this GitHub repository. Cloudflare reads `wrangler.toml` and deploys the Worker.
-- **Or from a terminal:** `npx wrangler login`, then `npm run worker:deploy`.
-
-**3. Add the key as a secret.** In the Worker's settings, under Variables and Secrets, add a secret named `ANTHROPIC_API_KEY` with your key. From a terminal, use `npx wrangler secret put ANTHROPIC_API_KEY` instead. Opening the Worker's URL should show `"keySet": true`.
-
-**4. Point the site at it.** Edit `config.json` in this repository (GitHub's web editor is fine) and set `pitBossUrl` to the Worker's URL, for example `https://long-shot-pit-boss.<your-subdomain>.workers.dev`. GitHub Pages redeploys and the pit boss is on duty.
-
-**Model and cost.** The Worker uses `claude-opus-5-5` at low effort. Each ruling uses a few hundred tokens, which works out to well under a cent. Only answers missing from the house list are checked, and the in-game ruling cache means a repeat answer costs nothing. To spend much less, set `MODEL = "claude-haiku-5-5"` in `wrangler.toml`. To cache rulings across all players, create a KV namespace and uncomment the `VERDICTS` binding in `wrangler.toml`.
+**Optional pit boss.** To have Claude rule on answers that aren't on the house list, add a secret named `ANTHROPIC_API_KEY` to the Worker (Settings → Variables and Secrets, or `npx wrangler secret put ANTHROPIC_API_KEY`). It uses `claude-opus-5-5` at low effort: a few hundred tokens per ruling, and each ruling is cached for everyone. Set `MODEL = "claude-haiku-5-5"` in `wrangler.toml` to spend much less. Without a key nothing is billed, and unlisted answers are voided.
 
 If you host the site somewhere other than `https://busyworkcitizen.github.io`, add that origin to `ALLOWED_ORIGINS`.
 
-To publish it as an artifact, use `dist/long-shot.artifact.html`, which `npm run build` creates. Declare these capabilities:
+### Publishing as a Claude artifact
+
+Use `dist/long-shot.artifact.html`, which `npm run build` creates, and declare these capabilities:
 
 ```json
 {
@@ -92,13 +88,14 @@ Each player's results live in one document at `plays/<their id>`. Everyone can r
 ## Project layout
 
 ```
-src/game.html          The game: markup, styles and script. The prompt bank is injected at /*@@BANK@@*/.
-data/prompts.json      Every prompt and its answers (58 prompts, about 52,000 answers).
-scripts/build.cjs      Builds index.html and dist/long-shot.artifact.html.
+src/game.html          The game page: markup, styles and script.
+src/engine.mjs         Rules, daily card, answer matching and odds, shared by the page and the server.
+data/prompts.json      Every prompt and its answers (58 prompts, about 56,000 answers).
+scripts/build.cjs      Builds index.html and dist/long-shot.artifact.html (inlines the engine and prompts).
 scripts/validate.cjs   Checks the prompt data for mistakes and answer collisions.
-worker/index.ts        The pit boss Cloudflare Worker (asks Claude about unlisted answers).
-wrangler.toml          Worker settings: allowed sites, model, optional ruling cache.
-config.json            Tells the public site where the pit boss Worker lives.
+worker/index.ts        The table server: multiplayer scoring, odds, first calls, leaderboards, optional pit boss.
+wrangler.toml          Server settings: allowed sites, database, pit boss model.
+config.json            Tells the public site where the table server lives.
 ```
 
 ## Editing prompts

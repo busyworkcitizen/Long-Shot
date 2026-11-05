@@ -344,21 +344,8 @@ textarea.share{width:100%;min-height:9em;font:14px/1.4 ui-monospace,Menlo,monosp
    Entry shape: [label, weight, [aliases]]. Answers not listed go to the pit boss (Claude). */
 const BANK = /*@@BANK@@*/[];
 
-/* ---------------- Rules of the house ---------------- */
-const RACES = 7, CLOCK = 30, MAX_BUSTS = 3;
-const K_PRIOR = 50;          // weight of the house list against real player picks
-const COVER = 0.95;          // share of picks the house list expects to cover
-const UNLISTED_P = 0.002;    // opening probability for an answer that isn't listed
-const FIRST_CALL_LINE = 33;  // first-call credit needs 33/1 or longer
-const LAUNCH = '2026-11-04';
-const BETS = [
-  {id:'fav',  name:'Favorite',   line:0,   mult:1, terms:'Any accepted answer', short:'Any answer'},
-  {id:'dark', name:'Dark Horse', line:10,  mult:2, terms:'10/1 or longer',      short:'10/1+'},
-  {id:'long', name:'Long Shot',  line:33,  mult:3, terms:'33/1 or longer',      short:'33/1+'},
-  {id:'moon', name:'Moonshot',   line:100, mult:5, terms:'100/1 or longer',     short:'100/1+'}
-];
-const BET = Object.fromEntries(BETS.map(b => [b.id, b]));
-const LADDER = [[0.2,'1/5'],[0.25,'1/4'],[1/3,'1/3'],[0.4,'2/5'],[0.5,'1/2'],[4/6,'4/6'],[0.8,'4/5'],[1,'Evens'],[1.2,'6/5'],[1.5,'6/4'],[1.75,'7/4'],[2,'2/1'],[2.5,'5/2'],[3,'3/1'],[3.5,'7/2'],[4,'4/1'],[4.5,'9/2'],[5,'5/1'],[6,'6/1'],[7,'7/1'],[8,'8/1'],[9,'9/1'],[10,'10/1'],[12,'12/1'],[14,'14/1'],[16,'16/1'],[20,'20/1'],[25,'25/1'],[33,'33/1'],[40,'40/1'],[50,'50/1'],[66,'66/1'],[80,'80/1'],[100,'100/1'],[150,'150/1'],[200,'200/1'],[250,'250/1'],[500,'500/1'],[1000,'1000/1']];
+/* ---------------- Rules, daily card, matching and odds (src/engine.mjs, shared with the server) ---------------- */
+/*@@ENGINE@@*/
 const SUITS = {Animal:'♣', Kitchen:'♥', Atlas:'♠', Culture:'♦', Wordplay:'♣', Science:'♠', Sporting:'♦', Everyday:'♥'};
 const BY_ID = Object.fromEntries(BANK.map(p => [p.id, p]));
 const REDUCED = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -370,10 +357,7 @@ const fmt = n => Math.round(n || 0).toLocaleString();
 const plural = (n, one, many) => n === 1 ? one : (many || one + 's');
 const clone = o => JSON.parse(JSON.stringify(o));
 const isRed = cat => ['♥','♦'].includes(SUITS[cat]);
-function rng(seed){ let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
-function shuffled(arr, seed){ const r = rng(seed), a = arr.slice(); for (let i = a.length - 1; i > 0; i--){ const j = Math.floor(r() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
 function todayStr(d = new Date()){ return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
-function dayNum(s){ const [y, m, d] = s.split('-').map(Number); return Math.round(Date.UTC(y, m - 1, d) / 864e5); }
 function cardNo(s){ return dayNum(s) - dayNum(LAUNCH) + 1; }
 function asDate(s){ const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); }
 function longDate(s){ return asDate(s).toLocaleDateString(undefined, {weekday:'long', day:'numeric', month:'long'}); }
@@ -469,108 +453,9 @@ function countUp(el, from, to, ms){
   requestAnimationFrame(step);
 }
 
-/* ---------------- The daily card ---------------- */
-function cardFor(date){
-  const n = dayNum(date), per = Math.floor(BANK.length / RACES);
-  const cycle = Math.floor(n / per), pos = ((n % per) + per) % per;
-  const order = shuffled(BANK.map((_, i) => i), 1009 + cycle * 7919);
-  return order.slice(pos * RACES, pos * RACES + RACES).map(i => BANK[i]);
-}
+function cardFor(date){ return makeCard(BANK, date); }
 
-/* ---------------- Matching typed answers against the house list ---------------- */
-function norm(s){
-  return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
-    .replace(/ø/g, 'o').replace(/ł/g, 'l').replace(/[đð]/g, 'd').replace(/þ/g, 'th').replace(/æ/g, 'ae').replace(/œ/g, 'oe').replace(/ß/g, 'ss').replace(/ı/g, 'i').replace(/ħ/g, 'h').replace(/&/g, ' and ').replace(/['’`]/g, '')
-    .replace(/[^a-z0-9]+/g, ' ').trim().replace(/^(the|a|an) /, '');
-}
-function keyOf(p, s){
-  let n = norm(s);
-  if (p.strip){
-    p._re = p._re || new RegExp('\\b(?:' + p.strip + ')(?:e?s)?\\b', 'g');
-    const t = n.replace(p._re, ' ').replace(/\s+/g, ' ').trim();
-    if (t) n = t;
-  }
-  return n;
-}
-function forms(n){
-  const out = new Set();
-  const add = s => { if (s){ out.add(s); out.add(s.replace(/ /g, '')); } };
-  add(n);
-  const m = n.match(/^(.*?)([a-z]+)$/);
-  if (m && m[2].length > 3){
-    const pre = m[1], w = m[2];
-    if (w.endsWith('ies')){ add(pre + w.slice(0, -3) + 'y'); add(pre + w.slice(0, -1)); }
-    if (w.endsWith('es')) add(pre + w.slice(0, -2));
-    if (w.endsWith('s') && !w.endsWith('ss')) add(pre + w.slice(0, -1));
-  }
-  return out;
-}
-function dist(a, b){
-  const m = a.length, n = b.length, d = [];
-  for (let i = 0; i <= m; i++) d[i] = [i];
-  for (let j = 0; j <= n; j++) d[0][j] = j;
-  for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++){
-    const c = a[i - 1] === b[j - 1] ? 0 : 1;
-    d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + c);
-    if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
-  }
-  return d[m][n];
-}
-function indexOf(p){
-  if (p._idx) return p._idx;
-  const entries = []; let sum = 0;
-  for (const [label, w, aliases] of p.a){
-    entries.push({k: keyOf(p, label), l: label.charAt(0).toUpperCase() + label.slice(1), w, names: [label, ...(aliases || [])]});
-    sum += w;
-  }
-  const byKey = new Map(), exact = new Map(), fuzzy = [];
-  for (const e of entries){
-    e.p0 = COVER * e.w / sum;
-    if (!byKey.has(e.k)) byKey.set(e.k, e);
-    for (const nm of e.names){
-      const n = keyOf(p, nm);
-      for (const f of forms(n)) if (!exact.has(f)) exact.set(f, e);
-      fuzzy.push([n.replace(/ /g, ''), e]);
-    }
-  }
-  return (p._idx = {entries, byKey, exact, fuzzy});
-}
-/* Longest listed answer that the typed text ends with, e.g. "giant pacific octopus" -> "Octopus". */
-function matchTail(p, text){
-  const idx = indexOf(p), words = keyOf(p, text).split(' ').filter(Boolean);
-  for (let i = 1; i < words.length; i++){
-    const tail = words.slice(i).join(' ');
-    if (tail.replace(/ /g, '').length < 3) break;
-    for (const f of forms(tail)){ const e = idx.exact.get(f); if (e) return e; }
-  }
-  return null;
-}
-function matchListed(p, text){
-  const idx = indexOf(p), n = keyOf(p, text);
-  if (!n) return null;
-  for (const f of forms(n)){ const e = idx.exact.get(f); if (e) return {e, d:0}; }
-  const q = n.replace(/ /g, '');
-  if (q.length < 5) return null;
-  const tol = q.length >= 9 ? 2 : 1;
-  let best = null, bd = tol + 1;
-  for (const [a, e] of idx.fuzzy){
-    if (a[0] !== q[0] || Math.abs(a.length - q.length) > tol) continue;
-    const d = dist(q, a);
-    if (d < bd){ bd = d; best = e; }
-  }
-  return best ? {e: best, d: bd} : null;
-}
-
-/* ---------------- Prices ---------------- */
-function priceOf(p){
-  p = Math.min(Math.max(p, 1e-6), 0.999);
-  const raw = (1 - p) / p;
-  let pick = LADDER[0];
-  for (const L of LADDER){ if (L[0] <= raw + 1e-9) pick = L; else break; }
-  return {v: pick[0], s: pick[1]};
-}
-function priceStr(v){ const L = LADDER.find(L => Math.abs(L[0] - v) < 1e-6); return L ? L[1] : Math.round(v) + '/1'; }
-function basePts(v){ return Math.min(100, Math.max(1, Math.round(10 * Math.log2(1 + v)))); }
+/* ---------------- Live tallies from the shared table ---------------- */
 function tallies(pid){
   const counts = {}, labels = {}; let N = 0;
   for (const d of S.docs){
@@ -583,11 +468,7 @@ function tallies(pid){
   }
   return {counts, labels, N};
 }
-function probOf(p, k, tal){
-  const ent = indexOf(p).byKey.get(k);
-  const p0 = ent ? ent.p0 : UNLISTED_P;
-  return ((tal.counts[k] || 0) + K_PRIOR * p0) / (tal.N + K_PRIOR);
-}
+function probOf(p, k, tal){ return probFrom(p, k, tal.counts, tal.N); }
 function firstCaller(pid, k){
   let best = null;
   for (const d of S.docs){
@@ -604,7 +485,7 @@ function firstCaller(pid, k){
 const S = {
   view: 'home', today: todayStr(), store: 'pending', storeWhy: '',
   me: {v:1, log:{}, verdicts:{}}, docs: [], docsState: 'idle',
-  uid: null, db: null, user: null, sample: null, sampleTried: false, pitBoss: '',
+  uid: null, db: null, user: null, sample: null, sampleTried: false, pitBoss: '', net: null, netBoard: null, netBoardAt: 0,
   run: null, slipMode: 'daily', clock: null, names: {}, ledgerFilter: 'all', lastSec: 99
 };
 const emptyMe = () => ({v:1, log:{}, verdicts:{}});
@@ -697,14 +578,78 @@ async function askPitBossServer(p, text){
     return {status:'unavailable', code: e && e.name === 'AbortError' ? 'timeout' : 'network'};
   } finally { clearTimeout(timer); }
 }
+const urlOk = u => typeof u === 'string' && /^(https:\/\/[^\s"'<>]+|http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/?)$/.test(u.trim());
 async function loadSiteConfig(){
   if (location.protocol === 'file:') return;
   try {
     const r = await fetch('config.json', {cache:'no-store'});
     if (!r.ok) return;
     const c = await r.json();
-    if (c && typeof c.pitBossUrl === 'string' && /^https:\/\/[^\s"'<>]+$/.test(c.pitBossUrl.trim())) S.pitBoss = c.pitBossUrl.trim();
+    if (c && urlOk(c.serverUrl)){
+      const url = c.serverUrl.trim().replace(/\/+$/, '');
+      const h = await withTimeout(fetch(url + '/', {cache:'no-store'}).then(x => x.json()), 6000).catch(() => null);
+      if (h && h.table) S.net = {url, pitBoss: !!h.pitBoss};
+    }
+    if (!S.net && c && urlOk(c.pitBossUrl)) S.pitBoss = c.pitBossUrl.trim();
   } catch (e){}
+}
+
+/* ---------------- Shared table on the public site (worker/index.ts) ---------------- */
+async function netCall(path, body){
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 20000);
+  try {
+    const r = await fetch(S.net.url + path, body
+      ? {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body), signal: ctl.signal}
+      : {cache:'no-store', signal: ctl.signal});
+    const j = await r.json().catch(() => null);
+    return j || {error: 'http_' + r.status};
+  } catch (e){ return {error: 'network'}; }
+  finally { clearTimeout(timer); }
+}
+function needSeat(next){
+  if (!S.net || S.me.net) return false;
+  openNameSheet(next);
+  return true;
+}
+async function fetchBoard(){
+  if (!S.net || S.netBoardLoading) return;
+  S.netBoardLoading = true;
+  const b = await netCall('/api/board?date=' + encodeURIComponent(S.today) + '&player=' + encodeURIComponent(S.me.net ? S.me.net.player : ''));
+  S.netBoardLoading = false; S.netBoard = b; S.netBoardAt = Date.now();
+  if (S.view === 'board') render();
+}
+function openNameSheet(next){
+  const w = $('#sheet'), cur = S.me.net ? S.me.net.name : '';
+  S.afterSeat = next || null;
+  w.innerHTML = `<div class="sheet-bg" data-act="close-help"></div>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="seat-h">
+    <h2 class="title" id="seat-h">${cur ? 'Change your name' : 'Take a seat'}</h2>
+    <p class="fine">${cur ? 'This is the name other players see on High rollers and next to your first calls.' : 'Pick the name other players will see on High rollers and next to your first calls. No account or email needed.'}</p>
+    <form id="seatForm" class="answer" autocomplete="off">
+      <label class="sr" for="seatName">Your name</label>
+      <input id="seatName" maxlength="20" placeholder="Your name" value="${esc(cur)}" autocomplete="nickname" spellcheck="false" enterkeyhint="go">
+      <button class="btn gold" type="submit">${cur ? 'SAVE' : 'SIT'}</button>
+    </form>
+    <p class="fine" id="seatMsg" role="status"></p>
+  </div>`;
+  w.hidden = false;
+  const inp = $('#seatName'); if (inp) inp.focus();
+}
+async function submitSeat(){
+  const inp = $('#seatName'), msg = $('#seatMsg'), name = (inp ? inp.value : '').trim().slice(0, 20);
+  if (!name){ if (msg) msg.textContent = 'Type a name first.'; return; }
+  if (msg) msg.textContent = 'Saving…';
+  const res = S.me.net
+    ? await netCall('/api/name', {player:S.me.net.player, token:S.me.net.token, name})
+    : await netCall('/api/join', {name});
+  if (!res || res.error){
+    if (msg) msg.textContent = res && res.error === 'rate_limited' ? 'Too many tries. Wait a little and try again.' : 'The shared table couldn’t be reached. Try again in a moment.';
+    return;
+  }
+  if (S.me.net) S.me.net.name = res.name; else S.me.net = {player: res.player, token: res.token, name: res.name};
+  saveMe(); closeHelp(); S.netBoardAt = 0;
+  const next = S.afterSeat; S.afterSeat = null;
+  if (next) next(); else render();
 }
 async function judge(p, text){
   if (!S.sample && S.pitBoss) return askPitBossServer(p, text);
@@ -736,6 +681,7 @@ function newRun(mode, card, from){
 }
 function startDaily(){
   if (S.store === 'pending') return;
+  if (needSeat(startDaily)) return;
   const d = day();
   if (d.done){ S.slipMode = 'daily'; go('done'); return; }
   S.run = newRun('daily', cardFor(S.today), d);
@@ -751,13 +697,16 @@ function unlimitedDeck(avoidId){
 }
 function startUnlimited(){
   if (S.store === 'pending') return;
+  if (needSeat(startUnlimited)) return;
   S.run = newRun('unlimited', unlimitedDeck());
   beginRace();
 }
 function cashOut(){
   const r = S.run;
   if (!r || r.mode !== 'unlimited' || r.phase !== 'reveal') return;
-  r.cashed = true; S.slipMode = 'unlimited'; Snd.win(false); go('done');
+  r.cashed = true; S.slipMode = 'unlimited'; Snd.win(false);
+  if (S.net && S.me.net && r.netRun && !r.offline) netCall('/api/cashout', {player:S.me.net.player, token:S.me.net.token, run:r.netRun});
+  go('done');
 }
 function beginRace(resumeT){
   const r = S.run;
@@ -796,6 +745,17 @@ async function submit(timeUp){
   const text = ((inp ? inp.value : r.draft) || '').trim().slice(0, 40);
   const p = r.card[r.i];
   r.phase = 'judging'; Snd.chip();
+  if (S.net && S.me.net && !r.offline){
+    const hit0 = text ? matchListed(p, text) : null;
+    let claim = null;
+    if (hit0 && (hit0.d <= 1 || !S.net.pitBoss)) claim = hit0.e.i;
+    else if (text && !hit0 && !S.net.pitBoss){ const t = matchTail(p, text); if (t) claim = t.i; }
+    if (text && claim == null && S.net.pitBoss){ r.inquiry = text; S.view = 'judging'; render(); }
+    const res = await netCall('/api/play', {player:S.me.net.player, token:S.me.net.token, mode:r.mode, date:r.date, run:r.netRun || null, round:r.i, prompt:p.id, answer:text, bet:r.bet, claim, timeUp: !!timeUp});
+    if (res && res.entry) return settleNet(res);
+    if (res && res.error === 'auth'){ S.me.net = null; saveMe(); }
+    r.offline = true;
+  }
   if (!text) return settle({a:'', v:false, why: timeUp ? 'Time ran out before you placed a bet.' : 'No answer was entered.'});
   const hit = matchListed(p, text);
   const canJudge = !!(S.sample || S.pitBoss);
@@ -835,7 +795,7 @@ function lookupVerdict(vkey){
 function settle(res){
   const r = S.run, p = r.card[r.i], bet = BET[r.bet] || BET.fav;
   const e = {p:p.id, a:res.a || '', b:bet.id, t:Date.now(), v:!!res.v};
-  r.prior = null;
+  r.prior = null; r.netMarket = null;
   if (res.void){ e.r = 'void'; e.s = 0; e.why = res.why; if (res.sc) e.sc = String(res.sc).slice(0, 30); }
   else if (!res.v){ e.r = 'bust'; e.s = 0; e.why = res.why; }
   else {
@@ -857,13 +817,33 @@ function settle(res){
     d.score = r.score; d.busts = r.busts; delete d.cur;
     d.done = d.e.length >= RACES || d.busts >= MAX_BUSTS;
     saveMe();
-  } else if (r.mode === 'unlimited'){
-    const u = S.me.unl || (S.me.unl = {best:0, bestRounds:0, runs:0, rounds:0, at:0});
-    u.rounds = (u.rounds || 0) + 1;
-    if (r.entries.length === 1) u.runs = (u.runs || 0) + 1;
-    if (r.score > (u.best || 0)){ u.best = r.score; u.bestRounds = r.entries.length; u.at = Date.now(); }
+  } else if (r.mode === 'unlimited') recordUnlimited(r);
+  S.view = 'reveal'; render(); window.scrollTo(0, 0);
+}
+function recordUnlimited(r){
+  const u = S.me.unl || (S.me.unl = {best:0, bestRounds:0, runs:0, rounds:0, at:0});
+  u.rounds = (u.rounds || 0) + 1;
+  if (r.entries.length === 1) u.runs = (u.runs || 0) + 1;
+  if (r.score > (u.best || 0)){ u.best = r.score; u.bestRounds = r.entries.length; u.at = Date.now(); }
+  saveMe();
+}
+/* A result scored by the shared table. */
+function settleNet(res){
+  const r = S.run, e = res.entry;
+  e.net = 1;
+  r.prior = res.prior ? {uid:'net', name: String(res.prior.name || 'A player'), t: +res.prior.t || 0} : null;
+  r.netMarket = {counts: res.counts || {}, labels: res.labels || {}, N: +res.N || 0};
+  if (res.run) r.netRun = res.run;
+  r.entries.push(e);
+  r.score = +res.total.score || 0; r.busts = +res.total.busts || 0;
+  r.last = e; r.phase = 'reveal'; r.played = false;
+  if (r.mode === 'daily'){
+    const d = day(r.date);
+    d.score = r.score; d.busts = r.busts; delete d.cur;
+    d.done = !!res.total.done;
     saveMe();
-  }
+  } else recordUnlimited(r);
+  S.netBoardAt = 0;
   S.view = 'reveal'; render(); window.scrollTo(0, 0);
 }
 const runOver = r => !!r.cashed || r.entries.length >= r.total || r.busts >= MAX_BUSTS;
@@ -937,7 +917,7 @@ function viewHome(){
   <div class="facts"><span class="fact"><b>${RACES}</b> rounds</span><span class="fact"><b>${CLOCK}s</b> each</span><span class="fact"><b>3</b> busts and you’re out</span></div>
   ${S.me.unl && S.me.unl.best ? `<p class="status">Unlimited best run: <b>${fmt(S.me.unl.best)} chips</b> over ${S.me.unl.bestRounds} ${plural(S.me.unl.bestRounds, 'round')}</p>` : ''}
   <p class="center"><button class="link" data-act="help">How to play</button></p>
-  ${S.store === 'local' ? `<p class="note">${esc(localNote())}</p>` : ''}`;
+  ${S.net ? (S.me.net ? `<p class="status">Playing as <b>${esc(S.me.net.name)}</b> on the shared table · <button class="link" data-act="rename">Change name</button></p>` : '<p class="fine center">You’ll pick a name when you sit down, and your chips go on the shared table.</p>') : S.store === 'local' ? `<p class="note">${esc(localNote())}</p>` : ''}`;
 }
 
 function viewRace(){
@@ -984,19 +964,12 @@ function viewJudging(){
 }
 
 function marketHTML(p, e){
-  const tal = tallies(p.id), idx = indexOf(p);
-  const keys = new Set(idx.entries.map(x => x.k));
-  Object.keys(tal.counts).forEach(k => keys.add(k));
-  if (e.k) keys.add(e.k);
-  const rows = [...keys].map(k => ({k, l: (idx.byKey.get(k) || {}).l || tal.labels[k] || (k === e.k ? e.l : k), p: probOf(p, k, tal)})).sort((a, b) => b.p - a.p);
-  const top = rows.slice(0, 5).map((x, i) => ({...x, rank: i + 1}));
-  const mi = e.k ? rows.findIndex(x => x.k === e.k) : -1;
-  if (mi >= 5) top.push({...rows[mi], rank: mi + 1});
-  const max = rows[0].p;
-  const foot = tal.N ? `Odds blend the house list with ${tal.N} ${plural(tal.N, 'pick')} from other players.` : 'No other player has answered this prompt yet, so these are the house’s opening odds.';
+  const tal = (S.run && S.run.netMarket) || tallies(p.id);
+  const mk = marketRows(p, tal.counts, tal.labels, tal.N, e.k, e.l), max = mk.max;
+  const foot = tal.N ? `Odds blend the house list with ${fmt(tal.N)} ${plural(tal.N, 'pick')} from other players.` : 'No other player has answered this prompt yet, so these are the house’s opening odds.';
   return `<section class="led later" aria-label="Odds board">
-    <h3>ODDS BOARD <small>${fmt(idx.entries.length)} answers on the house list</small></h3>
-    <ol>${top.map(x => `<li class="${x.k === e.k ? 'mine' : ''}"><span class="fill" style="width:${Math.max(3, x.p / max * 100).toFixed(1)}%"></span><span class="rk">${x.rank}</span><span class="nm">${esc(x.l)}${x.k === e.k ? ' · you' : ''}</span><span class="od">${priceOf(x.p).s}</span></li>`).join('')}</ol>
+    <h3>ODDS BOARD <small>${fmt(mk.listed)} answers on the house list</small></h3>
+    <ol>${mk.rows.map(x => `<li class="${x.k === e.k ? 'mine' : ''}"><span class="fill" style="width:${Math.max(3, x.p / max * 100).toFixed(1)}%"></span><span class="rk">${x.rank}</span><span class="nm">${esc(x.l)}${x.k === e.k ? ' · you' : ''}</span><span class="od">${priceOf(x.p).s}</span></li>`).join('')}</ol>
     <p class="foot">${foot}</p>
   </section>`;
 }
@@ -1018,7 +991,7 @@ function viewReveal(){
   const amt = e.r === 'paid' ? `+${fmt(e.s)} chips <span class="fine">(${e.base} × ${bet.mult})</span>` : e.r === 'void' ? 'No chips, no bust' : 'No payout';
   let banner = '';
   if (e.fc) banner = `<div class="banner first later"><span class="tag">★ FIRST CALL ★</span><p>Nobody had named <b>${esc(e.l)}</b> before. It goes in the trophy case under your name.</p></div>`;
-  else if (e.v && r.prior && e.o >= FIRST_CALL_LINE) banner = `<div class="banner plain later"><span class="tag">ALREADY CALLED</span><p>${nameSpan(r.prior.uid)} named ${esc(e.l)} first, on ${esc(stampDate(r.prior.t))}.</p></div>`;
+  else if (e.v && r.prior && e.o >= FIRST_CALL_LINE) banner = `<div class="banner plain later"><span class="tag">ALREADY CALLED</span><p>${r.prior.name ? esc(r.prior.name) : nameSpan(r.prior.uid)} named ${esc(e.l)} first, on ${esc(stampDate(r.prior.t))}.</p></div>`;
   return `
   <section class="reveal ${e.v && !r.played ? 'spinning' : ''} ${r.played ? 'landed' : ''} ${e.r === 'bust' ? 'lost' : ''}" id="reveal">
     <div class="ticket">
@@ -1127,7 +1100,7 @@ function viewLedger(){
   </div>`;
   const head = `<div><p class="eyebrow">Your collection${best ? ' · best card ' + fmt(best) + ' chips' : ''}</p><h1 class="title">Trophy case</h1></div>
     <p class="fine">Every answer the house accepts on a daily card is banked here with the odds you got. First calls are answers you named before anyone else.</p>
-    ${S.store === 'local' ? `<p class="note">${esc(localNote())}</p>` : ''}`;
+    ${S.store === 'local' && !S.net ? `<p class="note">${esc(localNote())}</p>` : ''}`;
   if (!rows.length) return head + stats + '<p class="empty">Nothing banked yet. Play today’s card and every accepted answer lands here.</p>';
   const list = S.ledgerFilter === 'first' ? rows.filter(e => e.fc) : rows;
   const groups = {};
@@ -1162,8 +1135,26 @@ function firstCalls(){
   for (const day of Object.values(S.me.log)) for (const e of day.e) if (e.fc) out.push({...e, uid:S.uid || 'me'});
   return out.sort((a, b) => b.t - a.t).slice(0, 15);
 }
+function netBoardHTML(){
+  const b = S.netBoard;
+  if (!b) return '<p class="empty">Counting chips…</p>';
+  if (b.error) return '<p class="empty">The shared table couldn’t be reached. Try again in a moment.</p>';
+  const row = (x, i, small, pts) => `<li class="${x.me ? 'me' : ''}"><span class="rk">${i + 1}</span><span class="av" aria-hidden="true"></span><span class="who">${esc(x.name || 'A player')}${x.me ? ' (you)' : ''}<small>${small}</small></span><span class="pts">${fmt(pts)}</span></li>`;
+  const today = b.today && b.today.length
+    ? `<ol class="leader">${b.today.map((x, i) => row(x, i, `${x.hits}/${x.n} paid · ${x.busts} ${plural(x.busts, 'bust')}${x.done ? '' : ' · still playing'}`, x.score)).join('')}</ol>`
+    : '<p class="empty">Nobody has played today’s card yet. Take the first seat.</p>';
+  const runs = b.runs && b.runs.length
+    ? `<ol class="leader">${b.runs.map((x, i) => row(x, i, `${x.bestRounds} ${plural(x.bestRounds, 'round')}${x.at ? ' · ' + esc(stampDate(x.at)) : ''}`, x.best)).join('')}</ol>`
+    : '<p class="empty">No unlimited runs yet. Play until you bust three times or cash out, and your best run lands here.</p>';
+  const calls = b.calls && b.calls.length
+    ? `<ol class="rows">${b.calls.map(c => `<li><span class="rn">${SUITS[(BY_ID[c.p] || {}).cat] || '★'}</span><span class="nm">${esc(c.l)}<small>${esc((BY_ID[c.p] || {}).q || '')} · ${esc(c.me ? 'You' : (c.name || 'A player'))}, ${esc(stampDate(c.t))}</small></span><span class="odds-pill">${priceStr(c.o)}</span></li>`).join('')}</ol>`
+    : '<p class="empty">No first calls yet. Land an answer at 33/1 or longer that nobody has named and it shows up here.</p>';
+  const seat = S.me.net ? `<p class="fine">You’re playing as <b>${esc(S.me.net.name)}</b>. <button class="link" data-act="rename">Change name</button></p>` : '<p class="fine">Pick a name when you sit down to play, and your chips go on this board.</p>';
+  return seat + `<section class="group"><h3>TODAY’S CHIP COUNT · EVERYONE</h3>${today}</section><section class="group"><h3>∞ UNLIMITED · BEST RUNS</h3>${runs}</section><section class="group"><h3>★ FIRST CALLS</h3>${calls}</section>`;
+}
 function viewBoard(){
   const head = `<div><p class="eyebrow">Card #${cardNo(S.today)} · ${esc(longDate(S.today))}</p><h1 class="title">High rollers</h1></div>`;
+  if (S.net) return head + netBoardHTML();
   if (!S.db && S.store !== 'pending') return head + '<p class="empty">High rollers needs this page’s shared table, which isn’t available in this copy. Your own chips are in the lobby and your trophy case.</p>';
   const loading = S.docsState === 'loading' || S.store === 'pending';
   const rows = standings(S.today);
@@ -1199,6 +1190,7 @@ function openHelp(){
       <li><b>Bust:</b> the odds come in shorter than your chip needs, or the answer isn’t accepted. You get nothing, and three busts end your card.</li>
       <li><b>Base chips</b> run from 10 at Evens to 100 at 1000/1. A 100/1 answer is worth 67, or 335 on a Moonshot chip.</li>
       <li><b>Pit boss:</b> answers that aren’t on the house list get checked by Claude on your account. ${esc(pit)}</li>
+      ${S.net ? '<li><b>Shared table:</b> odds, first calls and High rollers are shared with everyone playing on this site.</li>' : ''}
       <li><b>First call:</b> be the first player to land an answer at 33/1 or longer and your name goes on it for good.</li>
       <li><b>Unlimited:</b> endless rounds from the whole deck, minus today’s card. Keep going until three busts or cash out whenever you like. Your best run is ranked on High rollers, and unlimited play doesn’t change the daily odds.</li>
     </ul>
@@ -1223,6 +1215,7 @@ function render(){
   if (v === 'done'){ const t = $('#total'), s = slipData(); if (t && !S.cashShown){ S.cashShown = true; countUp(t, 0, s.score, 1100); } }
   if (v !== 'done') S.cashShown = false;
   if (v === 'board' || v === 'reveal') resolveNames();
+  if (v === 'board' && S.net && Date.now() - S.netBoardAt > 15000) fetchBoard();
 }
 function softRender(){ if (['home','board','ledger'].includes(S.view)) render(); }
 
@@ -1264,6 +1257,7 @@ document.addEventListener('click', ev => {
   if (a === 'daily') return startDaily();
   if (a === 'unlimited') return startUnlimited();
   if (a === 'cashout') return cashOut();
+  if (a === 'rename') return openNameSheet(null);
   if (a === 'bet') return pickBet(el.dataset.bet);
   if (a === 'next') return next();
   if (a === 'slip'){ S.slipMode = 'daily'; return go('done'); }
@@ -1273,7 +1267,10 @@ document.addEventListener('click', ev => {
   if (a === 'close-help') return closeHelp();
   if (a === 'sound'){ Snd.toggle(); return updateBar(true); }
 });
-document.addEventListener('submit', ev => { if (ev.target.id === 'answerForm'){ ev.preventDefault(); submit(false); } });
+document.addEventListener('submit', ev => {
+  if (ev.target.id === 'answerForm'){ ev.preventDefault(); submit(false); }
+  if (ev.target.id === 'seatForm'){ ev.preventDefault(); submitSeat(); }
+});
 document.addEventListener('input', ev => { if (ev.target.id === 'answer' && S.run) S.run.draft = ev.target.value; });
 document.addEventListener('keydown', ev => { if (ev.key === 'Escape' && !$('#sheet').hidden) closeHelp(); });
 

@@ -11,5 +11,5 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["worker/**/*.ts"]
+  "include": ["worker/**/*.ts", "src/engine.d.mts"]
 }
