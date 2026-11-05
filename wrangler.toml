@@ -4,6 +4,8 @@ name = "long-shot"
 main = "worker/index.ts"
 compatibility_date = "2026-10-01"
 compatibility_flags = ["nodejs_compat"]
+# Serve the Worker at https://long-shot.<your-subdomain>.workers.dev
+workers_dev = true
 
 [vars]
 # Only these sites may use the table. Comma-separated, no trailing slash.
