@@ -543,6 +543,16 @@ function indexOf(p){
   }
   return (p._idx = {entries, byKey, exact, fuzzy});
 }
+/* Longest listed answer that the typed text ends with, e.g. "giant pacific octopus" -> "Octopus". */
+function matchTail(p, text){
+  const idx = indexOf(p), words = keyOf(p, text).split(' ').filter(Boolean);
+  for (let i = 1; i < words.length; i++){
+    const tail = words.slice(i).join(' ');
+    if (tail.replace(/ /g, '').length < 3) break;
+    for (const f of forms(tail)){ const e = idx.exact.get(f); if (e) return e; }
+  }
+  return null;
+}
 function matchListed(p, text){
   const idx = indexOf(p), n = keyOf(p, text);
   if (!n) return null;
@@ -795,16 +805,24 @@ async function submit(timeUp){
   r.phase = 'judging'; Snd.chip();
   if (!text) return settle({a:'', v:false, why: timeUp ? 'Time ran out before you placed a bet.' : 'No answer was entered.'});
   const hit = matchListed(p, text);
-  if (hit && (hit.d <= 1 || !(S.sample || S.pitBoss))) return settle({a:text, v:true, k:hit.e.k, l:hit.e.l});
+  const canJudge = !!(S.sample || S.pitBoss);
+  if (hit && (hit.d <= 1 || !canJudge)) return settle({a:text, v:true, k:hit.e.k, l:hit.e.l});
   const vkey = p.id + '|' + keyOf(p, text);
   const cached = lookupVerdict(vkey);
   if (cached) return settle(cached.ok ? {a:text, v:true, k:cached.k, l:cached.l, st:'Accepted on an earlier ruling.'} : {a:text, v:false, why:'Not accepted' + (cached.why ? ': ' + cached.why : '.')});
+  // No pit boss, or it can't be reached: count "giant pacific octopus" as a listed "octopus" before voiding.
+  const fallback = code => {
+    const t = matchTail(p, text);
+    if (t) return settle({a:text, v:true, k:t.k, l:t.l, st:`Counted as ${t.l}, the closest answer on the house list.`});
+    return settle({a:text, void:true, sc:code, why: code === 'none' || code === 'off'
+      ? 'That answer isn’t on the house list, and there’s no pit boss here to check it. No chips, no bust.'
+      : 'That answer isn’t on the house list, and the pit boss couldn’t be reached to check it. No chips, no bust.'});
+  };
+  if (!canJudge) return fallback(S.sampleTried ? 'off' : 'none');
   r.inquiry = text; S.view = 'judging'; render();
   const res = await judge(p, text);
   if (res.status !== 'ok' && hit) return settle({a:text, v:true, k:hit.e.k, l:hit.e.l});
-  if (res.status !== 'ok') return settle({a:text, void:true, sc:res.code, why: res.code === 'none' || res.code === 'off'
-    ? 'This answer isn’t on the house list, and the pit boss (Claude) isn’t available in this app to check it. No chips, no bust.'
-    : 'This answer isn’t on the house list, and the pit boss (Claude) couldn’t be reached to check it. No chips, no bust.'});
+  if (res.status !== 'ok') return fallback(res.code);
   if (res.valid){
     const m2 = matchListed(p, res.canonical), again = m2 && m2.d === 0 ? m2.e : null;
     const k = again ? again.k : keyOf(p, res.canonical);
@@ -1174,7 +1192,7 @@ function viewBoard(){
 /* ---------------- How to play sheet ---------------- */
 function openHelp(){
   const w = $('#sheet');
-  const pit = S.sample || S.pitBoss ? 'The pit boss is on duty here.' : (S.store === 'pending' ? '' : 'The pit boss isn’t available in this app, so answers that aren’t on the house list are voided (no chips, no bust).');
+  const pit = S.sample || S.pitBoss ? 'The pit boss is on duty here.' : (S.store === 'pending' ? '' : 'There’s no pit boss here. An answer that isn’t on the house list counts as the listed answer it ends with (“giant squid” counts as Squid). Otherwise it’s voided, with no chips and no bust.');
   w.innerHTML = `<div class="sheet-bg" data-act="close-help"></div>
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="help-h">
     <h2 class="title" id="help-h">How to play</h2>
