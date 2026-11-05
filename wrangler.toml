@@ -1,0 +1,21 @@
+# Cloudflare Worker for the Long Shot pit boss (see README: "Pit boss on the public site").
+name = "long-shot-pit-boss"
+main = "worker/index.ts"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+# Only these sites may call the pit boss. Comma-separated, no trailing slash.
+ALLOWED_ORIGINS = "https://busyworkcitizen.github.io"
+# Claude model for rulings. claude-haiku-5-5 is much cheaper if cost matters more than accuracy.
+MODEL = "claude-opus-5-5"
+
+# The API key is a secret, not a var. Set it in the Cloudflare dashboard
+# (Worker > Settings > Variables and Secrets > add secret ANTHROPIC_API_KEY)
+# or with: npx wrangler secret put ANTHROPIC_API_KEY
+
+# Optional: cache rulings so the same answer is only ever checked once.
+# Create a KV namespace in the Cloudflare dashboard, then uncomment and paste its id.
+# [[kv_namespaces]]
+# binding = "VERDICTS"
+# id = "paste-the-namespace-id-here"

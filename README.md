@@ -32,7 +32,7 @@ The listed answers cover 95% of expected picks. An answer that isn't listed open
 
 ## Running it
 
-There are no dependencies, only Node 18 or newer for the build scripts.
+The game itself has no dependencies. The build scripts need Node 18 or newer, and you only need `npm install` to work on the pit boss Worker.
 
 ```bash
 npm run check
@@ -47,9 +47,32 @@ To host it, turn on GitHub Pages for the repository and serve the `main` branch 
 Some features need the Claude artifact runtime:
 - a shared table, so odds come from everyone's picks, with the High rollers leaderboard and first calls
 - player names and avatars
-- the **pit boss**, where Claude rules on answers that aren't in the house list
 
-The standalone `index.html` runs without them. Odds come from the house list alone, your chips are saved in the browser, and unlisted answers are voided (no chips, no bust).
+The standalone `index.html` runs without them: odds come from the house list alone and your chips are saved in the browser. The **pit boss**, where Claude rules on answers that aren't in the house list, works on the standalone site once you deploy the pit boss Worker below. Until then, unlisted answers are voided (no chips, no bust).
+
+### Pit boss on the public site
+
+A static site can't hold an API key, because anyone could copy it. So the pit boss runs as a small Cloudflare Worker (`worker/index.ts`) that keeps your Anthropic API key secret.
+
+The page sends the Worker only a prompt id and the player's answer (40 characters at most). The Worker writes the question to Claude itself, so it can't be used as a general Claude proxy. It also:
+- only accepts calls from the sites listed in `ALLOWED_ORIGINS` in `wrangler.toml`
+- limits each player's IP to 30 checks every 10 minutes
+- only gets asked about answers that aren't already in the house list
+
+**1. Get an Anthropic API key.** At [console.anthropic.com](https://console.anthropic.com), add credits and create an API key. Set a monthly spend limit for the account as well, as a safety net.
+
+**2. Deploy the Worker on Cloudflare (free plan).**
+
+- **From the dashboard:** go to Workers & Pages, create an application, and import this GitHub repository. Cloudflare reads `wrangler.toml` and deploys the Worker.
+- **Or from a terminal:** `npx wrangler login`, then `npm run worker:deploy`.
+
+**3. Add the key as a secret.** In the Worker's settings, under Variables and Secrets, add a secret named `ANTHROPIC_API_KEY` with your key. From a terminal, use `npx wrangler secret put ANTHROPIC_API_KEY` instead. Opening the Worker's URL should show `"keySet": true`.
+
+**4. Point the site at it.** Edit `config.json` in this repository (GitHub's web editor is fine) and set `pitBossUrl` to the Worker's URL, for example `https://long-shot-pit-boss.<your-subdomain>.workers.dev`. GitHub Pages redeploys and the pit boss is on duty.
+
+**Model and cost.** The Worker uses `claude-opus-5-5` at low effort. Each ruling uses a few hundred tokens, which works out to well under a cent. Only answers missing from the house list are checked, and the in-game ruling cache means a repeat answer costs nothing. To spend much less, set `MODEL = "claude-haiku-5-5"` in `wrangler.toml`. To cache rulings across all players, create a KV namespace and uncomment the `VERDICTS` binding in `wrangler.toml`.
+
+If you host the site somewhere other than `https://busyworkcitizen.github.io`, add that origin to `ALLOWED_ORIGINS`.
 
 To publish it as an artifact, use `dist/long-shot.artifact.html`, which `npm run build` creates. Declare these capabilities:
 
@@ -73,6 +96,9 @@ src/game.html          The game: markup, styles and script. The prompt bank is i
 data/prompts.json      Every prompt and its answers (58 prompts, about 15,000 answers).
 scripts/build.cjs      Builds index.html and dist/long-shot.artifact.html.
 scripts/validate.cjs   Checks the prompt data for mistakes and answer collisions.
+worker/index.ts        The pit boss Cloudflare Worker (asks Claude about unlisted answers).
+wrangler.toml          Worker settings: allowed sites, model, optional ruling cache.
+config.json            Tells the public site where the pit boss Worker lives.
 ```
 
 ## Editing prompts

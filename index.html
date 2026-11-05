@@ -602,7 +602,7 @@ function firstCaller(pid, k){
 const S = {
   view: 'home', today: todayStr(), store: 'pending', storeWhy: '',
   me: {v:1, log:{}, verdicts:{}}, docs: [], docsState: 'idle',
-  uid: null, db: null, user: null, sample: null, sampleTried: false,
+  uid: null, db: null, user: null, sample: null, sampleTried: false, pitBoss: '',
   run: null, slipMode: 'daily', clock: null, names: {}, ledgerFilter: 'all', lastSec: 99
 };
 const emptyMe = () => ({v:1, log:{}, verdicts:{}});
@@ -679,7 +679,32 @@ async function askPitBoss(prompt){
     return JSON.parse(m[0]);
   }
 }
+/* On the public site, the pit boss is a small server (see worker/) named in config.json. */
+async function askPitBossServer(p, text){
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 25000);
+  try {
+    const r = await fetch(S.pitBoss.replace(/\/+$/, '') + '/judge', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({prompt: p.id, answer: text}), signal: ctl.signal
+    });
+    if (!r.ok) return {status:'unavailable', code:'http_' + r.status};
+    const out = await r.json();
+    if (!out || typeof out.valid !== 'boolean') return {status:'unavailable', code:'bad_reply'};
+    return {status:'ok', valid: out.valid, canonical: String(out.canonical || text).slice(0, 40).trim() || text, reason: String(out.reason || '').slice(0, 120)};
+  } catch (e){
+    return {status:'unavailable', code: e && e.name === 'AbortError' ? 'timeout' : 'network'};
+  } finally { clearTimeout(timer); }
+}
+async function loadSiteConfig(){
+  try {
+    const r = await fetch('config.json', {cache:'no-store'});
+    if (!r.ok) return;
+    const c = await r.json();
+    if (c && typeof c.pitBossUrl === 'string' && /^https:\/\/[^\s"'<>]+$/.test(c.pitBossUrl.trim())) S.pitBoss = c.pitBossUrl.trim();
+  } catch (e){}
+}
 async function judge(p, text){
+  if (!S.sample && S.pitBoss) return askPitBossServer(p, text);
   if (!S.sample) return {status:'unavailable', code: S.sampleTried ? 'off' : 'none'};
   const clean = text.replace(/["\\\r\n]/g, ' ').slice(0, 40);
   const ask = [
@@ -770,7 +795,7 @@ async function submit(timeUp){
   r.phase = 'judging'; Snd.chip();
   if (!text) return settle({a:'', v:false, why: timeUp ? 'Time ran out before you placed a bet.' : 'No answer was entered.'});
   const hit = matchListed(p, text);
-  if (hit && (hit.d <= 1 || !S.sample)) return settle({a:text, v:true, k:hit.e.k, l:hit.e.l});
+  if (hit && (hit.d <= 1 || !(S.sample || S.pitBoss))) return settle({a:text, v:true, k:hit.e.k, l:hit.e.l});
   const vkey = p.id + '|' + keyOf(p, text);
   const cached = lookupVerdict(vkey);
   if (cached) return settle(cached.ok ? {a:text, v:true, k:cached.k, l:cached.l, st:'Accepted on an earlier ruling.'} : {a:text, v:false, why:'Not accepted' + (cached.why ? ': ' + cached.why : '.')});
@@ -943,7 +968,7 @@ function viewJudging(){
     <div class="spin-chip" aria-hidden="true">${chipHTML(r.bet, '?')}</div>
     <p class="neon-sm">PIT BOSS REVIEW</p>
     <h1 class="title">“${esc(r.inquiry)}” isn’t on the house list</h1>
-    <p class="fine">Claude is checking whether it’s a real answer to “${esc(p.q)}”. The clock is stopped. If the app asks to let Claude run on this page, allow it to get a ruling.</p>
+    <p class="fine">Claude is checking whether it’s a real answer to “${esc(p.q)}”. The clock is stopped.${S.sample ? ' If the app asks to let Claude run on this page, allow it to get a ruling.' : ''}</p>
   </section>`;
 }
 
@@ -1149,7 +1174,7 @@ function viewBoard(){
 /* ---------------- How to play sheet ---------------- */
 function openHelp(){
   const w = $('#sheet');
-  const pit = S.sample ? 'The pit boss is on duty in this app.' : (S.store === 'pending' ? '' : 'The pit boss isn’t available in this app, so answers that aren’t on the house list are voided (no chips, no bust).');
+  const pit = S.sample || S.pitBoss ? 'The pit boss is on duty here.' : (S.store === 'pending' ? '' : 'The pit boss isn’t available in this app, so answers that aren’t on the house list are voided (no chips, no bust).');
   w.innerHTML = `<div class="sheet-bg" data-act="close-help"></div>
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="help-h">
     <h2 class="title" id="help-h">How to play</h2>
@@ -1270,7 +1295,7 @@ function subscribeDocs(){
 }
 async function initCaps(){
   const C = window.claude;
-  if (!C || typeof C.use !== 'function') return useLocal('none');
+  if (!C || typeof C.use !== 'function'){ await loadSiteConfig(); return useLocal('none'); }
   let user = null, db = null, sample = null;
   try { [user, db, sample] = await Promise.all([C.use('user'), C.use('db'), C.use('sample')]); } catch (e){}
   S.user = user; S.db = db; S.sample = sample; S.sampleTried = true;
