@@ -1,0 +1,11 @@
+{
+  "name": "long-shot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A daily casino-style trivia game: bet on how rare your answer is.",
+  "scripts": {
+    "build": "node scripts/build.cjs",
+    "validate": "node scripts/validate.cjs",
+    "check": "node scripts/validate.cjs && node scripts/build.cjs"
+  }
+}
