@@ -93,7 +93,7 @@ Each player's results live in one document at `plays/<their id>`. Everyone can r
 
 ```
 src/game.html          The game: markup, styles and script. The prompt bank is injected at /*@@BANK@@*/.
-data/prompts.json      Every prompt and its answers (58 prompts, about 15,000 answers).
+data/prompts.json      Every prompt and its answers (58 prompts, about 52,000 answers).
 scripts/build.cjs      Builds index.html and dist/long-shot.artifact.html.
 scripts/validate.cjs   Checks the prompt data for mistakes and answer collisions.
 worker/index.ts        The pit boss Cloudflare Worker (asks Claude about unlisted answers).

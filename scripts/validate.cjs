@@ -12,7 +12,7 @@ catch (e) { console.error('data/prompts.json does not parse: ' + e.message); pro
 // Same normalization the game uses (see src/game.html: norm, keyOf, forms).
 function norm(s){
   return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
-    .replace(/ø/g, 'o').replace(/&/g, ' and ').replace(/['’`]/g, '')
+    .replace(/ø/g, 'o').replace(/ł/g, 'l').replace(/[đð]/g, 'd').replace(/þ/g, 'th').replace(/æ/g, 'ae').replace(/œ/g, 'oe').replace(/ß/g, 'ss').replace(/ı/g, 'i').replace(/ħ/g, 'h').replace(/&/g, ' and ').replace(/['’`]/g, '')
     .replace(/[^a-z0-9]+/g, ' ').trim().replace(/^(the|a|an) /, '');
 }
 function keyOf(p, s){
